@@ -1,0 +1,79 @@
+pool:
+  vmImage: 'windows-latest'
+
+parameters:
+  - name: storageAccountRG
+    type: string
+    default: 'your-storage-account-resource-group'
+  - name: actionGroupResourceGroup
+    type: string
+    default: 'your-action-group-resource-group'
+  - name: existingActionGroupName
+    type: string
+    default: 'your-existing-action-group-name'
+  - name: azureSubscription
+    type: string
+    default: 'your-azure-subscription-name'
+    values:
+      - '1'
+      - '2'
+      - '3'
+      - '4'
+      - '5'
+
+steps:
+- task: AzurePowerShell@5
+  inputs:
+    azureSubscription: '${{ parameters.azureSubscription }}'
+    scriptType: 'InlineScript'
+    azurePowerShellVersion: 'LatestVersion'
+    pwsh: true
+    Inline: |
+      # Retrieve the existing action group
+      if ("${{ parameters.existingActionGroupName }}" -ne ' ') {
+      $actionGroup = Get-AzActionGroup -ResourceGroupName "${{ parameters.actionGroupResourceGroup }}" -Name "${{ parameters.existingActionGroupName}}"
+      }
+
+      # Get the storage account objects in the specified resource group
+      $storageAccounts = Get-AzStorageAccount -ResourceGroupName ${{ parameters.storageAccountRG }}
+
+      foreach ($storageAccount in $storageAccounts) {
+          $storageAccountName = $($storageAccount.StorageAccountName).ToString()
+          if ($null -eq $storageAccount) {
+              Write-Output "Storage account $storageAccountName in resource group '$storageAccountRG' not found. Skipping..."
+          }
+          else {
+              Write-Output "Creating alert rule for storage account $storageAccountName in resource group $storageAccountRG..."
+          }
+
+          # Define the alert parameters
+          $alertName = "$storageAccountName Availability Alert"
+          $alertDescription = "Alert triggered when the availability of the storage account $storageAccountName is less than 100%."
+          $metricName = "Availability"
+          $operator = "LessThan"
+          $threshold = 100 
+          $windowSize = "1:0:0" # 1 hour
+          $frequency = "0:5:0" # 5 minutes
+          $severity = 2 # Warning
+
+          # Define the metric criteria for the alert
+          $criteria = New-AzMetricAlertRuleV2Criteria `
+            -MetricName $metricName `
+            -Operator $operator `
+            -Threshold $threshold `
+            -TimeAggregation "Average"
+
+          # Create the metric alert rule using the existing action group
+          Add-AzMetricAlertRuleV2 `
+              -ResourceGroupName ${{ parameters.storageAccountRG }} `
+              -Name $alertName `
+              -Description $alertDescription `
+              -TargetResourceId $storageAccount.Id `
+              -WindowSize $windowSize `
+              -Frequency $frequency `
+              -Severity $severity `
+              -ActionGroupId $actionGroup.Id `
+              -Criteria $criteria
+
+          Write-Output "Alert rule created for storage account $storageAccountName in resource group $storageAccountRG."
+      }
